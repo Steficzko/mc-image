@@ -1,0 +1,46 @@
+name: build
+# Static mc in a tiny image. Why: backup Jobs fetched mc from GitHub releases on every run;
+# on 2026-11-08 github.com started answering 504 to the nixery curl, failing every backup.
+on:
+  workflow_dispatch:
+    inputs:
+      mc_release:
+        description: "minio/mc release tag"
+        default: "RELEASE.2025-08-13T08-35-41Z"
+      mc_sha256:
+        description: "sha256 of mc.linux-amd64.<release>"
+        default: "01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  MC_RELEASE: ${{ inputs.mc_release || 'RELEASE.2025-08-13T08-35-41Z' }}
+  MC_SHA256: ${{ inputs.mc_sha256 || '01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891' }}
+  IMAGE: ghcr.io/steficzko/mc
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Fetch and verify the pinned mc
+        run: |
+          curl -fsSL --retry 5 -o mc "https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.linux-amd64.${MC_RELEASE}"
+          echo "${MC_SHA256}  mc" | sha256sum -c -
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build, check, push
+        run: |
+          TAG="${IMAGE}:${MC_RELEASE}"
+          docker build --label org.opencontainers.image.source=https://github.com/${{ github.repository }} -t "$TAG" .
+          docker run --rm "$TAG" sh -c "echo '${MC_SHA256}  /mc' | sha256sum -c -"
+          docker push "$TAG"
+          docker inspect --format '{{index .RepoDigests 0}}' "$TAG" | tee -a "$GITHUB_STEP_SUMMARY"
